@@ -80,7 +80,8 @@ export async function generate(
   items: GenerateItem[],
   withHeader: boolean,
 ): Promise<Blob> {
-  const useBlob = sources.every((source) => Boolean(source.blobUrl));
+  // The previous run deleted the uploads, so re-upload if needed.
+  const useBlob = await ensureUploaded(sources);
   const response = await post("/api/generate", sources, { items, withHeader }, useBlob);
   if (!response.ok) throw new Error(await failure(response));
   // The originals are deleted server side once the output exists.
@@ -97,6 +98,7 @@ export async function pagePreview(source: Source, pageIndex: number): Promise<Pa
   return (await response.json()) as PagePreview;
 }
 
+/** Drops the uploaded originals; they hold recipients' personal data. */
 export async function cleanup(sources: Source[]): Promise<void> {
   const urls = sources.map((source) => source.blobUrl).filter(Boolean) as string[];
   if (urls.length === 0) return;

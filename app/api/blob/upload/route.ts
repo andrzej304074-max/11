@@ -22,7 +22,10 @@ export async function POST(request: Request) {
         allowedContentTypes: ["application/pdf"],
         maximumSizeInBytes: 40 * 1024 * 1024,
         addRandomSuffix: true,
-        // Short-lived: the objects are deleted as soon as the output is built.
+        // Blob has no object expiry, so disposal is explicit: the objects are
+        // deleted as soon as the output is built (and when the user clears the
+        // queue or closes the tab). The short cache window keeps copies from
+        // lingering on the edge afterwards.
         cacheControlMaxAge: 60,
       }),
       onUploadCompleted: async () => {

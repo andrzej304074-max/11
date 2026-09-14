@@ -94,8 +94,10 @@ Etykiety zawierają imiona, nazwiska, adresy i numery telefonów odbiorców, czy
 dane osobowe osób trzecich.
 
 * pliki są przetwarzane wyłącznie w pamięci, nic nie ląduje na dysku,
-* obiekty w Vercel Blob mają krótki TTL i są kasowane natychmiast po zbudowaniu
-  wyniku (`discardBlobs`), a także przy usunięciu pliku z kolejki,
+* Vercel Blob nie ma wygasania obiektów, więc kasowanie jest jawne: obiekty
+  znikają natychmiast po zbudowaniu wyniku (`discardBlobs`), przy usunięciu
+  pliku z kolejki i przy zamknięciu karty; `cacheControlMaxAge` jest ustawione
+  na minutę, żeby kopie nie zostawały na edge'u,
 * logi zawierają tylko liczby stron i czasy — nigdy treści, nazw ani adresów,
 * nie ma żadnej analityki zdarzeń z zawartości plików,
 * nie ma bazy, logowania ani historii konwersji.

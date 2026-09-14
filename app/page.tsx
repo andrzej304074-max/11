@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { CropEditor } from "@/components/CropEditor";
 import { DropZone } from "@/components/DropZone";
@@ -22,28 +22,52 @@ export default function Home() {
 
   const selected = useMemo(() => cards.filter((card) => card.include).length, [cards]);
 
+  // The uploaded originals hold third-party personal data: drop them if the
+  // user walks away without generating anything.
+  const live = useRef<Source[]>([]);
+  live.current = sources;
+  useEffect(() => {
+    const drop = () => void cleanup(live.current);
+    window.addEventListener("pagehide", drop);
+    return () => window.removeEventListener("pagehide", drop);
+  }, []);
+
   const addFiles = (files: File[]) => {
     setSources((current) => [...current, ...files.map((file) => ({ file }))]);
     setCards([]);
   };
 
+  /** Keeps already-analyzed cards pointing at the right file after a reorder. */
+  const remapCards = (map: (fileIndex: number) => number | null) => {
+    setCards((current) =>
+      current
+        .map((card) => {
+          const next = map(card.fileIndex);
+          return next === null ? null : { ...card, fileIndex: next };
+        })
+        .filter((card): card is CardState => card !== null)
+        .sort((a, b) => a.fileIndex - b.fileIndex || a.pageIndex - b.pageIndex || a.id.localeCompare(b.id)),
+    );
+  };
+
   const moveFile = (index: number, delta: number) => {
+    const target = index + delta;
+    if (target < 0 || target >= sources.length) return;
     setSources((current) => {
       const next = [...current];
-      const target = index + delta;
-      if (target < 0 || target >= next.length) return current;
       [next[index], next[target]] = [next[target], next[index]];
       return next;
     });
-    setCards([]);
+    remapCards((fileIndex) => (fileIndex === index ? target : fileIndex === target ? index : fileIndex));
   };
 
   const removeFile = (index: number) => {
-    setSources((current) => {
-      void cleanup([current[index]]);
-      return current.filter((_, i) => i !== index);
-    });
-    setCards([]);
+    void cleanup([sources[index]]);
+    setSources((current) => current.filter((_, i) => i !== index));
+    remapCards((fileIndex) =>
+      fileIndex === index ? null : fileIndex > index ? fileIndex - 1 : fileIndex,
+    );
+    setPreviews({});
   };
 
   const runAnalyze = async () => {
