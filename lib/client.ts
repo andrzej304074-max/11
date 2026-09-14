@@ -10,7 +10,18 @@ export type Source = { file: File; blobUrl?: string };
  * Uploads straight to Vercel Blob when it is configured, and falls back to a
  * plain multipart POST otherwise (local development, small batches).
  */
+let blobAvailable: Promise<boolean> | null = null;
+
+function blobConfigured(): Promise<boolean> {
+  blobAvailable ??= fetch("/api/blob/upload")
+    .then((response) => (response.ok ? response.json() : { available: false }))
+    .then((data: { available?: boolean }) => data.available === true)
+    .catch(() => false);
+  return blobAvailable;
+}
+
 async function ensureUploaded(sources: Source[]): Promise<boolean> {
+  if (!(await blobConfigured())) return false;
   try {
     for (const source of sources) {
       if (source.blobUrl) continue;

@@ -108,9 +108,10 @@ export function LabelCard({
           <span className="rounded-full bg-neutral-200 px-2 py-0.5">kod QR, nie naklejka</span>
         )}
         {item.splitOf && <span className="rounded-full bg-blue-100 px-2 py-0.5 text-blue-900">2-częściowa</span>}
-        <span className="ml-auto text-neutral-400">
-          str. {item.pageIndex + 1} · {(item.confidence * 100).toFixed(0)}%
-        </span>
+      </div>
+
+      <div className="-mt-1 text-[11px] text-neutral-400">
+        str. {item.pageIndex + 1} · pewność {(item.confidence * 100).toFixed(0)}%
       </div>
 
       <input

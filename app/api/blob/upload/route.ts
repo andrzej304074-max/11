@@ -3,6 +3,11 @@ import { handleUpload, type HandleUploadBody } from "@vercel/blob/client";
 export const runtime = "nodejs";
 export const maxDuration = 60;
 
+/** Tells the client whether direct-to-blob upload is configured at all. */
+export function GET() {
+  return Response.json({ available: Boolean(process.env.BLOB_READ_WRITE_TOKEN) });
+}
+
 /**
  * Issues a signed, single-use token so the browser uploads straight to Vercel
  * Blob. A function body is capped near 4.5 MB, which thirty labels exceed.
