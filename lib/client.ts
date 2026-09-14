@@ -67,12 +67,60 @@ async function failure(response: Response): Promise<string> {
   }
 }
 
-export async function analyze(sources: Source[]): Promise<AnalyzedItem[]> {
+/** Pages per request. Small enough to keep every call far from the 60 s
+ *  function ceiling and to put the first labels on screen quickly. */
+const CHUNK = 5;
+
+export type AnalyzeProgress = { done: number; total: number };
+
+/**
+ * Walks every file a few pages at a time, handing labels to `onItems` as soon
+ * as each slice comes back. One request for a thirty-page batch would take tens
+ * of seconds on a cold function, show nothing until the very end, and risk
+ * hitting the duration limit.
+ */
+export async function analyze(
+  sources: Source[],
+  onItems?: (items: AnalyzedItem[]) => void,
+  onProgress?: (progress: AnalyzeProgress) => void,
+): Promise<AnalyzedItem[]> {
   const useBlob = await ensureUploaded(sources);
-  const response = await post("/api/analyze", sources, {}, useBlob);
-  if (!response.ok) throw new Error(await failure(response));
-  const data = (await response.json()) as { items: AnalyzedItem[] };
-  return data.items;
+  const all: AnalyzedItem[] = [];
+
+  // Page counts are unknown up front: the total starts as one slice per file
+  // and sharpens as each file reports its real length.
+  const pageCounts = new Map<number, number>();
+  const lengthOf = (index: number) => pageCounts.get(index) ?? CHUNK;
+
+  for (let fileIndex = 0; fileIndex < sources.length; fileIndex++) {
+    let from = 0;
+    let pages = Infinity;
+    while (from < pages) {
+      const response = await post(
+        "/api/analyze",
+        [sources[fileIndex]],
+        { fileIndexBase: fileIndex, fromPage: from, pageCount: CHUNK },
+        useBlob,
+      );
+      if (!response.ok) throw new Error(await failure(response));
+      const data = (await response.json()) as { items: AnalyzedItem[]; pageCount: number };
+
+      pages = data.pageCount;
+      pageCounts.set(fileIndex, pages);
+      from = Math.min(from + CHUNK, pages);
+      all.push(...data.items);
+      if (data.items.length) onItems?.(data.items);
+
+      let done = from;
+      let total = 0;
+      for (let i = 0; i < sources.length; i++) {
+        if (i < fileIndex) done += lengthOf(i);
+        total += lengthOf(i);
+      }
+      onProgress?.({ done, total });
+    }
+  }
+  return all;
 }
 
 export async function generate(

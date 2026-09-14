@@ -11,7 +11,7 @@ import { MM, type AnalyzedItem, type GenerateItem } from "../lib/types";
 export const fixture = (name: string) => readFileSync(path.join(process.cwd(), "fixtures", name));
 
 export async function analyzeFixture(name: string): Promise<AnalyzedItem[]> {
-  return analyzeFile(0, fixture(name));
+  return (await analyzeFile(0, fixture(name))).items;
 }
 
 export function toGenerateItems(items: AnalyzedItem[]): GenerateItem[] {

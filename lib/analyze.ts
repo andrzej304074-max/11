@@ -198,22 +198,37 @@ async function analyzePage(
   return { items: out };
 }
 
-/** Analyze one uploaded PDF. Pages are processed one at a time; no bitmap is retained. */
-export async function analyzeFile(fileIndex: number, bytes: Uint8Array): Promise<AnalyzedItem[]> {
-  const [pdf, pages] = await Promise.all([
-    loadPdf(bytes),
-    extractText(bytes).catch((error: unknown) => {
+export type AnalyzeRange = { from?: number; count?: number };
+export type AnalyzeResult = { items: AnalyzedItem[]; pageCount: number };
+
+/**
+ * Analyze one uploaded PDF, optionally only a slice of its pages.
+ *
+ * Pages are processed one at a time and no bitmap is kept: a batch of thirty
+ * labels would otherwise hold well over a hundred megabytes of grayscale at
+ * once. Slicing also keeps a single request well clear of the function's
+ * 60 s ceiling and lets the interface show labels as they are found.
+ */
+export async function analyzeFile(
+  fileIndex: number,
+  bytes: Uint8Array,
+  range: AnalyzeRange = {},
+): Promise<AnalyzeResult> {
+  const pdf = await loadPdf(bytes);
+  try {
+    const from = Math.min(Math.max(0, range.from ?? 0), pdf.pageCount);
+    const to = Math.min(pdf.pageCount, from + (range.count ?? pdf.pageCount));
+    const pages = await extractText(bytes, { from, count: to - from }).catch((error: unknown) => {
       // A missing text layer costs titles and orientation but not the crop, so
       // keep going — and say so, since it is never normal.
       console.warn("text layer unavailable:", error instanceof Error ? error.message : "unknown");
       return [] as PageText[];
-    }),
-  ]);
-  const results: AnalyzedItem[] = [];
-  try {
-    for (let pageIndex = 0; pageIndex < pdf.pageCount; pageIndex++) {
+    });
+
+    const items: AnalyzedItem[] = [];
+    for (let pageIndex = from; pageIndex < to; pageIndex++) {
       const page = await pdf.renderPage(pageIndex);
-      const { items } = await analyzePage(
+      const result = await analyzePage(
         fileIndex,
         pageIndex,
         page.gray,
@@ -221,14 +236,14 @@ export async function analyzeFile(fileIndex: number, bytes: Uint8Array): Promise
         page.height,
         page.widthPt,
         page.heightPt,
-        pages[pageIndex],
+        pages[pageIndex - from],
       );
-      results.push(...items);
+      items.push(...result.items);
       // Drop the bitmap before moving to the next page.
       page.gray.fill(0);
     }
+    return { items, pageCount: pdf.pageCount };
   } finally {
     pdf.destroy();
   }
-  return results;
 }

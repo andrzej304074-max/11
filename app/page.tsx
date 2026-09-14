@@ -6,7 +6,15 @@ import { CropEditor } from "@/components/CropEditor";
 import { DropZone } from "@/components/DropZone";
 import { FileQueue } from "@/components/FileQueue";
 import { LabelCard, type CardState } from "@/components/LabelCard";
-import { type PagePreview, type Source, analyze, cleanup, generate, pagePreview } from "@/lib/client";
+import {
+  type AnalyzeProgress,
+  type PagePreview,
+  type Source,
+  analyze,
+  cleanup,
+  generate,
+  pagePreview,
+} from "@/lib/client";
 import { printPdf } from "@/lib/print";
 import type { GenerateItem, PtRect } from "@/lib/types";
 
@@ -19,6 +27,7 @@ export default function Home() {
   const [withHeader, setWithHeader] = useState(true);
   const [busy, setBusy] = useState<null | "analyze" | "generate" | "print" | "preview">(null);
   const [error, setError] = useState<string | null>(null);
+  const [progress, setProgress] = useState<AnalyzeProgress | null>(null);
   const [editing, setEditing] = useState<Editing>(null);
 
   const selected = useMemo(() => cards.filter((card) => card.include).length, [cards]);
@@ -74,21 +83,31 @@ export default function Home() {
   const runAnalyze = async () => {
     setBusy("analyze");
     setError(null);
+    setProgress({ done: 0, total: 0 });
+    setCards([]);
+    setPreviews({});
     try {
-      const items = await analyze(sources);
-      setCards(
-        items.map((item) => ({
-          ...item,
-          include: item.kind !== "qr-only",
-          edited: false,
-          detectedRotate: item.rotate,
-        })),
+      // Cards land as each slice of pages comes back, so a long batch shows
+      // something within a second or two instead of after the whole run.
+      await analyze(
+        sources,
+        (items) =>
+          setCards((current) => [
+            ...current,
+            ...items.map((item) => ({
+              ...item,
+              include: item.kind !== "qr-only",
+              edited: false,
+              detectedRotate: item.rotate,
+            })),
+          ]),
+        setProgress,
       );
-      setPreviews({});
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : "Analiza nie powiodła się");
     } finally {
       setBusy(null);
+      setProgress(null);
     }
   };
 
@@ -165,15 +184,30 @@ export default function Home() {
           disabled={busy !== null}
         />
 
-        {sources.length > 0 && cards.length === 0 && (
-          <button
-            type="button"
-            onClick={runAnalyze}
-            disabled={busy !== null}
-            className="rounded-lg bg-neutral-900 px-5 py-2.5 text-sm font-medium text-white disabled:opacity-50"
-          >
-            {busy === "analyze" ? "Analizuję…" : "Analizuj etykiety"}
-          </button>
+        {sources.length > 0 && (cards.length === 0 || busy === "analyze") && (
+          <div className="flex flex-wrap items-center gap-3">
+            <button
+              type="button"
+              onClick={runAnalyze}
+              disabled={busy !== null}
+              className="rounded-lg bg-neutral-900 px-5 py-2.5 text-sm font-medium text-white disabled:opacity-50"
+            >
+              {busy === "analyze" ? "Analizuję…" : "Analizuj etykiety"}
+            </button>
+            {progress && progress.total > 0 && (
+              <>
+                <div className="h-1.5 w-40 overflow-hidden rounded-full bg-neutral-200">
+                  <div
+                    className="h-full bg-neutral-900 transition-[width] duration-300"
+                    style={{ width: `${Math.round((progress.done / progress.total) * 100)}%` }}
+                  />
+                </div>
+                <span className="text-sm text-neutral-500">
+                  strona {progress.done} z {progress.total}
+                </span>
+              </>
+            )}
+          </div>
         )}
 
         {error && (

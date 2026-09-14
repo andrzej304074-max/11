@@ -36,8 +36,17 @@ async function getPdfjs(): Promise<PdfjsModule> {
   return pdfjsPromise;
 }
 
-/** Extract the text layer of every page. Fonts are never rendered. */
-export async function extractText(bytes: Uint8Array): Promise<PageText[]> {
+export type PageRange = { from?: number; count?: number };
+
+/**
+ * Extract the text layer. Fonts are never rendered.
+ *
+ * The range matters for throughput: the analyzer processes a document in
+ * chunks, and parsing every page's text on each chunk would multiply the
+ * single most expensive stage by the number of chunks. Index 0 of the result is
+ * page `from`.
+ */
+export async function extractText(bytes: Uint8Array, range: PageRange = {}): Promise<PageText[]> {
   const pdfjs = await getPdfjs();
   const task = pdfjs.getDocument({
     data: new Uint8Array(bytes),
@@ -48,9 +57,12 @@ export async function extractText(bytes: Uint8Array): Promise<PageText[]> {
   });
   const doc = await task.promise;
 
+  const first = Math.max(0, range.from ?? 0) + 1;
+  const last = Math.min(doc.numPages, first - 1 + (range.count ?? doc.numPages));
+
   const pages: PageText[] = [];
   try {
-    for (let i = 1; i <= doc.numPages; i++) {
+    for (let i = first; i <= last; i++) {
       const page = await doc.getPage(i);
       const viewport = page.getViewport({ scale: 1 });
       const content = await page.getTextContent();
