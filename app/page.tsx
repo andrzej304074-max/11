@@ -7,6 +7,7 @@ import { DropZone } from "@/components/DropZone";
 import { FileQueue } from "@/components/FileQueue";
 import { LabelCard, type CardState } from "@/components/LabelCard";
 import { type PagePreview, type Source, analyze, cleanup, generate, pagePreview } from "@/lib/client";
+import { printPdf } from "@/lib/print";
 import type { GenerateItem, PtRect } from "@/lib/types";
 
 type Editing = { id: string; preview: PagePreview } | null;
@@ -16,7 +17,7 @@ export default function Home() {
   const [cards, setCards] = useState<CardState[]>([]);
   const [previews, setPreviews] = useState<Record<string, PagePreview>>({});
   const [withHeader, setWithHeader] = useState(true);
-  const [busy, setBusy] = useState<null | "analyze" | "generate" | "preview">(null);
+  const [busy, setBusy] = useState<null | "analyze" | "generate" | "print" | "preview">(null);
   const [error, setError] = useState<string | null>(null);
   const [editing, setEditing] = useState<Editing>(null);
 
@@ -110,8 +111,8 @@ export default function Home() {
     }
   };
 
-  const runGenerate = async () => {
-    setBusy("generate");
+  const runGenerate = async (target: "download" | "print") => {
+    setBusy(target === "print" ? "print" : "generate");
     setError(null);
     try {
       const items: GenerateItem[] = cards.map((card, index) => ({
@@ -126,6 +127,10 @@ export default function Home() {
         padMm: card.padMm,
       }));
       const blob = await generate(sources, items, withHeader);
+      if (target === "print") {
+        printPdf(blob);
+        return;
+      }
       const url = URL.createObjectURL(blob);
       const link = document.createElement("a");
       link.href = url;
@@ -200,17 +205,26 @@ export default function Home() {
             </span>
             <button
               type="button"
-              onClick={runGenerate}
+              onClick={() => void runGenerate("print")}
               disabled={busy !== null || selected === 0}
-              className="ml-auto rounded-lg bg-neutral-900 px-5 py-2.5 text-sm font-medium text-white disabled:opacity-50"
+              className="ml-auto rounded-lg border border-neutral-300 bg-white px-4 py-2.5 text-sm font-medium disabled:opacity-50"
+            >
+              {busy === "print" ? "Przygotowuję…" : "Drukuj"}
+            </button>
+            <button
+              type="button"
+              onClick={() => void runGenerate("download")}
+              disabled={busy !== null || selected === 0}
+              className="rounded-lg bg-neutral-900 px-5 py-2.5 text-sm font-medium text-white disabled:opacity-50"
             >
               {busy === "generate" ? "Generuję…" : "Generuj PDF"}
             </button>
           </div>
 
           <p className="mb-5 text-xs text-neutral-600">
-            Drukuj z Podglądu, rozmiar papieru 100 × 150 mm, skala 100%, nie „dopasuj do rozmiaru”.
-            Wydrukuj najpierw jedną stronę na próbę.
+            „Drukuj” otwiera okno drukowania od razu, „Generuj PDF” pobiera plik. W obu wypadkach
+            ustaw rozmiar papieru 100 × 150 mm i skalę 100%, nie „dopasuj do rozmiaru”. Wydrukuj
+            najpierw jedną stronę na próbę.
           </p>
 
           <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
