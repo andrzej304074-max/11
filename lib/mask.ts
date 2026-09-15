@@ -391,6 +391,45 @@ export function hasBarcode(m: Mask, crop: PxRect): boolean {
   return false;
 }
 
+/**
+ * Whether the crop is enclosed by a drawn frame on all four sides.
+ *
+ * This, not the fallback flag, is what decides the print margin. A framed
+ * label (InPost, Orlen, GLS, DPD) carries its own white gutter inside the
+ * border, so only a thin rule sits near the sticker's edge. A frameless one
+ * (Poczta Polska) has its barcode literally at the crop boundary and needs a
+ * wider margin, or the smallest misfeed clips the code.
+ */
+export function hasFrame(m: Mask, crop: PxRect): boolean {
+  const band = Math.max(1, Math.round(0.02 * m.dpi));
+  const covered = 0.9;
+
+  const rowCoverage = (y: number) => {
+    let count = 0;
+    const base = y * m.w;
+    for (let x = crop.x; x < crop.x + crop.w; x++) if (m.ink[base + x]) count++;
+    return count / crop.w;
+  };
+  const columnCoverage = (x: number) => {
+    let count = 0;
+    for (let y = crop.y; y < crop.y + crop.h; y++) if (m.ink[y * m.w + x]) count++;
+    return count / crop.h;
+  };
+
+  const best = (from: number, to: number, measure: (v: number) => number) => {
+    let top = 0;
+    for (let v = from; v !== to; v += from < to ? 1 : -1) top = Math.max(top, measure(v));
+    return top;
+  };
+
+  return (
+    best(crop.y, crop.y + band, rowCoverage) >= covered &&
+    best(crop.y + crop.h - 1, crop.y + crop.h - 1 - band, rowCoverage) >= covered &&
+    best(crop.x, crop.x + band, columnCoverage) >= covered &&
+    best(crop.x + crop.w - 1, crop.x + crop.w - 1 - band, columnCoverage) >= covered
+  );
+}
+
 /** Total ink pixels inside a rectangle. */
 export function inkCount(m: Mask, rect: PxRect): number {
   let count = 0;

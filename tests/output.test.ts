@@ -15,6 +15,7 @@ const FIXTURES = [
   "qr-only.pdf",
   "two-line-title.pdf",
   "poczta-landscape.pdf",
+  "poczta-compact.pdf",
 ];
 
 describe("kryterium 1: rozmiar strony wyjściowej", () => {
@@ -42,15 +43,31 @@ describe("kryterium 2: tusz nie dotyka krawędzi", () => {
   });
 });
 
-describe("kryterium 3: strony sparse mają szerszy zapas", () => {
-  it.each(["poczta.pdf", "poczta-landscape.pdf"])("%s trzyma >= 5 mm z boku", async (name) => {
-    const items = await analyzeFixture(name);
-    expect(items.some((item) => item.sparse)).toBe(true);
-    expect(items[0].padMm).toBe(6);
+describe("kryterium 3: etykiety bez ramki mają szerszy zapas", () => {
+  const FRAMELESS = ["poczta.pdf", "poczta-landscape.pdf", "poczta-compact.pdf"];
+  const FRAMED = ["inpost.pdf", "gls.pdf", "duplicates.pdf", "rotated.pdf"];
+
+  it.each(FRAMELESS)("%s trzyma >= 5 mm z boku", async (name) => {
+    const [item] = await analyzeFixture(name);
+    expect(item.padMm).toBe(6);
 
     const margins = await inkMargins(await renderFixture(name), 0);
     expect(margins.left).toBeGreaterThanOrEqual(5);
     expect(margins.right).toBeGreaterThanOrEqual(5);
+  });
+
+  it("margines zależy od ramki, nie od tego, którą ścieżką znaleziono kadr", async () => {
+    // This label's parts sit close enough for the dilation to join them, so the
+    // fallback of step 6 never fires — and deciding the margin by that flag
+    // printed a frameless barcode 1.5 mm from the sticker's edge.
+    const [compact] = await analyzeFixture("poczta-compact.pdf");
+    expect(compact.sparse).toBe(false);
+    expect(compact.padMm).toBe(6);
+  });
+
+  it.each(FRAMED)("%s zostaje przy 1,5 mm", async (name) => {
+    const items = await analyzeFixture(name);
+    for (const item of items) expect(item.padMm).toBe(1.5);
   });
 });
 

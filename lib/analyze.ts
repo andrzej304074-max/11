@@ -7,6 +7,7 @@ import {
   clearAbove,
   detectLabelBlock,
   hasBarcode,
+  hasFrame,
   internalDividers,
   segmentColumns,
   trimTopTitleBand,
@@ -102,7 +103,12 @@ async function analyzePage(
   const orientation = dominantAngle(items, cropPt);
   const rotate = orientation.angle;
 
-  const padMm = block.sparse ? PAD_SPARSE_MM : PAD_FRAMED_MM;
+  // The margin follows the frame, not the code path that found the crop: a
+  // frameless label can still come out of the normal path when dilation happens
+  // to join its parts, and it would then print with its barcode 1.5 mm from the
+  // sticker's edge.
+  const framed = hasFrame(mask, cropPx);
+  const padMm = framed ? PAD_FRAMED_MM : PAD_SPARSE_MM;
   const barcode = hasBarcode(mask, cropPx);
   const textCount = itemsInside(items, cropPt).filter((i) => i.str.trim()).length;
   const kind = barcode ? "label" : textCount < 12 ? "qr-only" : "unknown";

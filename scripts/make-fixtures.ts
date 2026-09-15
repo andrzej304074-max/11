@@ -22,13 +22,23 @@ function prng(seed: number) {
   };
 }
 
+/**
+ * A GS1-128-like bar pattern: strict alternation of bars and spaces, each one
+ * to four modules wide. Real linear barcodes never leave a wide white gap, and
+ * a generator that does produces fixtures that lie — a gap over ~5 pt splits
+ * the code into separate ink bands during column segmentation.
+ */
 function barcode(page: PDFPage, x: number, y: number, w: number, h: number, seed: number) {
   const rand = prng(seed);
+  const modules = 211; // a 20-digit GS1-128 symbol
+  const unit = w / modules;
   let cx = x;
+  let dark = true;
   while (cx < x + w) {
-    const bar = 0.7 + rand() * 1.8;
-    if (rand() > 0.35) page.drawRectangle({ x: cx, y, width: bar, height: h, color: BLACK });
-    cx += bar + 0.7 + rand() * 1.6;
+    const run = Math.min(1 + Math.floor(rand() * 4), (x + w - cx) / unit) * unit;
+    if (dark && run > 0) page.drawRectangle({ x: cx, y, width: run, height: h, color: BLACK });
+    cx += run;
+    dark = !dark;
   }
 }
 
@@ -272,7 +282,25 @@ async function main() {
     await save("poczta-landscape.pdf", pdf);
   }
 
-  // 9. Two-line offer name — the case step 3's band height test misses and only
+  // 9. Frameless label whose parts sit close enough for the dilation to join
+  //    them into one block. The fallback of step 6 never fires, so the margin
+  //    cannot be decided by that flag — only by the absence of a frame.
+  {
+    const { pdf, ctx } = await doc();
+    const page = pdf.addPage(LANDSCAPE_A4);
+    const h = LANDSCAPE_A4[1];
+    text(page, ctx, "Spodnie Dresowe Szare Baggy Szerokie Mskie", 16, h - 16, 12, true);
+    text(page, ctx, "R", 150, h - 150, 15, true);
+    barcode(page, 176, h - 164, 190, 34, 107);
+    text(page, ctx, "(00) 55900773 0 49234386 1", 180, h - 176, 5);
+    text(page, ctx, "F", 120, h - 196, 6);
+    text(page, ctx, "Ewa Cudek Petryshyn", 146, h - 214, 13, true);
+    text(page, ctx, "Jagiellonska 23", 146, h - 232, 13, true);
+    text(page, ctx, "32-410 DOBCZYCE", 146, h - 250, 13, true);
+    await save("poczta-compact.pdf", pdf);
+  }
+
+  // 10. Two-line offer name — the case step 3's band height test misses and only
   //    the text-layer limiter catches.
   {
     const { pdf, ctx } = await doc();
