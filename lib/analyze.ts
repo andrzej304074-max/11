@@ -170,9 +170,17 @@ async function analyzePage(
     const partScale = fitScale(partPt, rotate, padMm);
     if (partScale < MIN_SCALE) {
       confidence -= 0.15;
+      const pct = (value: number) => `${Math.round(value * 100)}%`;
+      // A label that is wider than it is tall wastes most of a portrait
+      // sticker. Turning it sideways can buy back a lot of size, so say so —
+      // the rotation buttons are right there — rather than only warning.
+      const turned = fitScale(partPt, ((rotate + 90) % 360) as 0 | 90 | 180 | 270, padMm);
       notes.push(
-        `Etykieta zmieści się dopiero w ${Math.round(partScale * 100)}% oryginału — na drukarce ` +
-          "203 DPI cienkie kreski kodu mogą się zlewać. Sprawdź wydruk próbny.",
+        turned > partScale * 1.25
+          ? `Etykieta zmieści się dopiero w ${pct(partScale)} oryginału. Obrócona o 90° zmieściłaby ` +
+            `się w ${pct(turned)} — kody byłyby wyraźnie czytelniejsze, tylko tekst stanie bokiem.`
+          : `Etykieta zmieści się dopiero w ${pct(partScale)} oryginału — na drukarce 203 DPI ` +
+            "cienkie kreski kodu mogą się zlewać. Zrób wydruk próbny i zeskanuj kod.",
       );
     }
     if (duplicates) {

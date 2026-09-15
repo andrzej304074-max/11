@@ -96,10 +96,16 @@ describe("etykieta bez ramki na arkuszu poziomym", () => {
     expect(item.confidence).toBeLessThan(0.8);
   });
 
-  it("ostrzega, gdy etykieta zmieści się dopiero mocno pomniejszona", async () => {
+  it("podpowiada obrót, gdy etykieta zmieści się dopiero mocno pomniejszona", async () => {
     const [item] = await analyzeFixture("poczta-landscape.pdf");
-    expect(fitScale(item.crop, item.rotate, item.padMm)).toBeLessThan(0.75);
-    expect(item.notes.some((note) => note.includes("203 DPI"))).toBe(true);
+    const upright = fitScale(item.crop, item.rotate, item.padMm);
+    expect(upright).toBeLessThan(0.75);
+
+    // A wide, short label gains a lot from being turned sideways, so the note
+    // has to offer that rather than only warn about print quality.
+    const turned = fitScale(item.crop, 90, item.padMm);
+    expect(turned).toBeGreaterThan(upright * 1.25);
+    expect(item.notes.some((note) => note.includes("Obrócona o 90°"))).toBe(true);
   });
 
   it("nazwa oferty nie wchodzi w kadr", async () => {
