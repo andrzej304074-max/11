@@ -10,6 +10,7 @@ import { PDFDocument, PDFFont, PDFPage, StandardFonts, degrees, rgb } from "pdf-
 
 const A4: [number, number] = [595.28, 841.89];
 const LETTER: [number, number] = [612, 792];
+const LANDSCAPE_A4: [number, number] = [841.89, 595.28];
 const BLACK = rgb(0, 0, 0);
 
 /** Deterministic PRNG so fixtures are byte-stable between runs. */
@@ -238,7 +239,40 @@ async function main() {
     await save("qr-only.pdf", pdf);
   }
 
-  // 8. Two-line offer name — the case step 3's band height test misses and only
+  // 8. Poczta Polska on a landscape sheet: no frame, a dense barcode sitting
+  //    far from everything else, and the label's own sender block starting
+  //    inside the top 15% of the page. Both traps of this layout are real:
+  //    the barcode alone holds more than half the page's ink, and the "offer
+  //    name" trim eats the sender block unless it is bounded by the text layer.
+  {
+    const { pdf, ctx } = await doc();
+    const page = pdf.addPage(LANDSCAPE_A4);
+    const h = LANDSCAPE_A4[1];
+    text(page, ctx, "Spodnie Baggy W Krat Musztardowe Szerokie Damskie", 16, h - 16, 12, true);
+
+    const sender = [
+      "Vinted Go UAB w imieniu i na r",
+      "Maria Kluba",
+      "Aleksandra Fredry 32",
+      "30-605 Krakow",
+      "F eCommerce, Max masa 1kg",
+    ];
+    sender.forEach((line, i) => text(page, ctx, line, 50, h - 62 - i * 11, 5));
+    text(page, ctx, "Umowa nr ID: 437317/W Karta: 778991 z", 268, h - 62, 5);
+    text(page, ctx, "Poczta Polska S.A.", 292, h - 73, 5);
+
+    text(page, ctx, "R", 246, h - 158, 15, true);
+    barcode(page, 272, h - 172, 160, 32, 101);
+    text(page, ctx, "(00) 55900773 0 49411673 9", 274, h - 184, 5);
+
+    text(page, ctx, "VSPV", 55, h - 240, 20, true);
+    text(page, ctx, "Emilia Firlej", 196, h - 226, 6, true);
+    text(page, ctx, "Zaokopowa 4/6 , Kod do furtki i klatki: 78 kluczyk 6882 m:78", 196, h - 240, 6, true);
+    text(page, ctx, "03-424 WARSZAWA", 196, h - 254, 6, true);
+    await save("poczta-landscape.pdf", pdf);
+  }
+
+  // 9. Two-line offer name — the case step 3's band height test misses and only
   //    the text-layer limiter catches.
   {
     const { pdf, ctx } = await doc();

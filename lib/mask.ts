@@ -26,8 +26,14 @@ function rowHasInk(m: Mask, y: number, x0 = 0, x1 = m.w - 1): boolean {
  * Step 3: strip the marketplace's offer name glued above the label.
  * It is not part of the label and must not enter the crop — on some layouts it
  * sits right above the frame and merges with it during dilation.
+ *
+ * `floorY` is the lower edge of the offer name as read from the text layer,
+ * below which nothing may be stripped. Without it this heuristic misfires on
+ * landscape sheets: the "top 15% of the page" test spans only about 92 pt
+ * there, and a frameless label whose sender block starts at 56 pt loses four of
+ * its own lines to the four passes.
  */
-export function trimTopTitleBand(m: Mask): void {
+export function trimTopTitleBand(m: Mask, floorY = Number.POSITIVE_INFINITY): void {
   const gap = Math.round(0.053 * m.dpi); // 8 px at 150 DPI
   const maxBandHeight = 0.35 * m.dpi;
   const topZone = 0.15 * m.h;
@@ -40,7 +46,7 @@ export function trimTopTitleBand(m: Mask): void {
         break;
       }
     }
-    if (top < 0) return;
+    if (top < 0 || top >= floorY) return;
 
     // Grow downwards while the run of empty rows stays within `gap`.
     let bottom = top;
@@ -269,6 +275,13 @@ export function detectLabelBlock(m: Mask, column: Column): BlockResult | null {
     if (rect.w < minSide || rect.h < minSide) continue;
     const bounds = inkBounds(m, rect);
     if (!bounds) continue;
+    // The size test has to land on the tight ink box, not on the dilated
+    // region: dilation adds a quarter inch on every side, which is enough to
+    // lift a fragment well under the minimum above it. A lone barcode on a
+    // frameless label measures 0.53 inch tall and its dilated region 1.03 —
+    // judged on the latter it wins the page and the crop keeps only the
+    // barcode.
+    if (bounds.box.w < minSide || bounds.box.h < minSide) continue;
     candidates.push({ rect, inkCount: bounds.count, inkRect: bounds.box });
   }
   if (candidates.length === 0) {

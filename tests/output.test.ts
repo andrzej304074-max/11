@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 
-import { analyzeFixture, inkMargins, outputAngles, outputText, pageSizes, renderFixture } from "./helpers";
+import { analyzeFixture, fixture, inkMargins, outputAngles, outputText, pageSizes, renderFixture } from "./helpers";
+import { extractText } from "../lib/text";
 import { fitScale } from "../lib/analyze";
 import { SHEET_H, SHEET_W } from "../lib/types";
 
@@ -13,6 +14,7 @@ const FIXTURES = [
   "rotated.pdf",
   "qr-only.pdf",
   "two-line-title.pdf",
+  "poczta-landscape.pdf",
 ];
 
 describe("kryterium 1: rozmiar strony wyjściowej", () => {
@@ -41,14 +43,68 @@ describe("kryterium 2: tusz nie dotyka krawędzi", () => {
 });
 
 describe("kryterium 3: strony sparse mają szerszy zapas", () => {
-  it("poczta.pdf trzyma >= 5 mm z boku", async () => {
-    const items = await analyzeFixture("poczta.pdf");
+  it.each(["poczta.pdf", "poczta-landscape.pdf"])("%s trzyma >= 5 mm z boku", async (name) => {
+    const items = await analyzeFixture(name);
     expect(items.some((item) => item.sparse)).toBe(true);
     expect(items[0].padMm).toBe(6);
 
-    const margins = await inkMargins(await renderFixture("poczta.pdf"), 0);
+    const margins = await inkMargins(await renderFixture(name), 0);
     expect(margins.left).toBeGreaterThanOrEqual(5);
     expect(margins.right).toBeGreaterThanOrEqual(5);
+  });
+});
+
+describe("etykieta bez ramki na arkuszu poziomym", () => {
+  /** Text items whose origin falls inside the crop. */
+  const insideCrop = async (name: string) => {
+    const [item] = await analyzeFixture(name);
+    const [page] = await extractText(fixture(name));
+    const { crop } = item;
+    return {
+      item,
+      text: page.items
+        .filter((entry) => {
+          const x = entry.transform[4];
+          const y = entry.transform[5];
+          return x >= crop.x && x <= crop.x + crop.w && y >= crop.y && y <= crop.y + crop.h;
+        })
+        .map((entry) => entry.str)
+        .join(" "),
+    };
+  };
+
+  it("nie przycina kadru do samego kodu kreskowego", async () => {
+    const { item, text } = await insideCrop("poczta-landscape.pdf");
+
+    // The regression: the barcode alone holds 58% of the page's ink, so the
+    // 50% rule from step 6 does not fire, and its dilated region clears the
+    // 0.8 inch minimum even though the crop it yields is 0.53 inch tall.
+    expect(item.crop.h).toBeGreaterThan(0.8 * 72);
+    expect(item.crop.w).toBeGreaterThan(0.8 * 72);
+
+    // Everything that belongs on the sticker has to be inside the crop.
+    expect(text).toContain("Vinted Go UAB");
+    expect(text).toContain("Emilia Firlej");
+    expect(text).toContain("55900773");
+    expect(text).toContain("VSPV");
+  });
+
+  it("dostaje flagę sparse i szerszy margines", async () => {
+    const [item] = await analyzeFixture("poczta-landscape.pdf");
+    expect(item.sparse).toBe(true);
+    expect(item.padMm).toBe(6);
+    expect(item.confidence).toBeLessThan(0.8);
+  });
+
+  it("ostrzega, gdy etykieta zmieści się dopiero mocno pomniejszona", async () => {
+    const [item] = await analyzeFixture("poczta-landscape.pdf");
+    expect(fitScale(item.crop, item.rotate, item.padMm)).toBeLessThan(0.75);
+    expect(item.notes.some((note) => note.includes("203 DPI"))).toBe(true);
+  });
+
+  it("nazwa oferty nie wchodzi w kadr", async () => {
+    const { text } = await insideCrop("poczta-landscape.pdf");
+    expect(text).not.toContain("Musztardowe");
   });
 });
 

@@ -153,8 +153,10 @@ export function detectCarrier(items: TextItem[], crop: PtRect): string | null {
 
 export type TitleBlock = {
   text: string;
-  /** Lower edge of the title block in PDF points — a hard limit for the crop. */
+  /** Baseline of the block's lowest line, in PDF points. */
   bottomPt: number;
+  /** Font size of the block, so callers can allow for descenders. */
+  size: number;
 };
 
 /**
@@ -205,5 +207,5 @@ export function extractTitle(page: PageText): TitleBlock | null {
     .trim();
 
   const bottomPt = Math.min(...inBand.map((item) => item.transform[5]));
-  return { text, bottomPt };
+  return { text, bottomPt, size };
 }

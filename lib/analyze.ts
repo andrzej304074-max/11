@@ -72,17 +72,24 @@ async function analyzePage(
 ): Promise<PageAnalysis> {
   const mask: Mask = buildMask(gray, width, height, DPI);
 
-  // Step 3: drop the marketplace's offer name from the top of the sheet.
-  trimTopTitleBand(mask);
-
-  // Step 9's limiter, applied before segmentation so the name can never be
-  // dilated into the label block. A two-line name survives step 3 (it forms one
-  // ~0.41 inch band) and only this catches it.
+  // Step 9's limiter runs first and is the precise signal: the text layer says
+  // exactly where the offer name ends. Applied before segmentation so the name
+  // can never be dilated into the label block — a two-line name forms one
+  // ~0.41 inch band and slips past step 3's height test.
   const titleBlock = text ? extractTitle(text) : null;
+  let titleFloor = Number.POSITIVE_INFINITY;
   if (titleBlock) {
-    const limitPx = ((heightPt - (titleBlock.bottomPt - 2)) * DPI) / 72;
-    clearAbove(mask, limitPx);
+    // bottomPt is a baseline: "p", "gg" and "y" hang below it, and a flat
+    // couple of points is not enough for a large name — the tails survive and
+    // print as specks along the top of the sticker.
+    const descender = 0.35 * titleBlock.size;
+    titleFloor = ((heightPt - (titleBlock.bottomPt - descender)) * DPI) / 72;
+    clearAbove(mask, titleFloor);
   }
+
+  // Step 3 then mops up anything left above that edge. It is the whole answer
+  // only when a page has no text layer to read the name from.
+  trimTopTitleBand(mask, titleFloor);
 
   const { column, duplicates } = segmentColumns(mask);
   const block = detectLabelBlock(mask, column);
@@ -140,7 +147,6 @@ async function analyzePage(
   for (let i = 0; i < parts.length; i++) {
     const partPx = parts[i];
     const partPt = pxToPt(partPx, heightPt, DPI);
-    const partItems = itemsInside(items, partPt);
     const carrier = detectCarrier(items, partPt);
 
     const notes: string[] = [];
@@ -160,6 +166,14 @@ async function analyzePage(
     if (split) {
       confidence -= 0.15;
       notes.push("Etykieta dwuczęściowa, obie części naklej na tę samą paczkę.");
+    }
+    const partScale = fitScale(partPt, rotate, padMm);
+    if (partScale < MIN_SCALE) {
+      confidence -= 0.15;
+      notes.push(
+        `Etykieta zmieści się dopiero w ${Math.round(partScale * 100)}% oryginału — na drukarce ` +
+          "203 DPI cienkie kreski kodu mogą się zlewać. Sprawdź wydruk próbny.",
+      );
     }
     if (duplicates) {
       notes.push("Strona zawierała dwie kopie — wzięto lewą.");
@@ -192,7 +206,6 @@ async function analyzePage(
       notes,
     });
 
-    void partItems;
   }
 
   return { items: out };
