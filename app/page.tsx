@@ -28,6 +28,8 @@ export default function Home() {
   const [busy, setBusy] = useState<null | "analyze" | "generate" | "print" | "preview">(null);
   const [error, setError] = useState<string | null>(null);
   const [progress, setProgress] = useState<AnalyzeProgress | null>(null);
+  /** Set when a run finished cleanly but found nothing, so the screen says so. */
+  const [empty, setEmpty] = useState(false);
   const [editing, setEditing] = useState<Editing>(null);
 
   const selected = useMemo(() => cards.filter((card) => card.include).length, [cards]);
@@ -84,12 +86,13 @@ export default function Home() {
     setBusy("analyze");
     setError(null);
     setProgress({ done: 0, total: 0 });
+    setEmpty(false);
     setCards([]);
     setPreviews({});
     try {
       // Cards land as each slice of pages comes back, so a long batch shows
       // something within a second or two instead of after the whole run.
-      await analyze(
+      const found = await analyze(
         sources,
         (items) =>
           setCards((current) => [
@@ -103,6 +106,9 @@ export default function Home() {
           ]),
         setProgress,
       );
+      // Finishing with nothing is not success: without this the screen would
+      // just drop back to the idle button as if the click never happened.
+      setEmpty(found.length === 0);
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : "Analiza nie powiodła się");
     } finally {
@@ -212,6 +218,17 @@ export default function Home() {
 
         {error && (
           <p className="rounded-lg border border-red-300 bg-red-50 px-4 py-3 text-sm text-red-800">{error}</p>
+        )}
+
+        {empty && !error && (
+          <div className="rounded-lg border border-amber-300 bg-amber-50 px-4 py-3 text-sm text-amber-900">
+            <p className="font-medium">Nie znalazłem żadnej etykiety w tych plikach.</p>
+            <p className="mt-1">
+              Analiza przeszła bez błędu, ale każda strona wyszła pusta. Najczęstsza przyczyna to PDF
+              będący skanem albo plik zabezpieczony hasłem. Sprawdź, czy strony w ogóle wyświetlają się
+              w podglądzie.
+            </p>
+          </div>
         )}
       </div>
 
