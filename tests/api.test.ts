@@ -89,6 +89,41 @@ describe("/api/analyze", () => {
     expect(data.pageCount).toBe(1);
   });
 
+  it("strumieniuje wyniki strona po stronie", async () => {
+    stubBlob();
+    const response = await analyze(
+      new Request("http://localhost/api/analyze", {
+        method: "POST",
+        headers: { "content-type": "application/json", accept: "application/x-ndjson" },
+        body: JSON.stringify({ sources: [{ url: "https://x.public.blob.vercel-storage.com/a.pdf" }] }),
+      }),
+    );
+    expect(response.headers.get("content-type")).toContain("application/x-ndjson");
+
+    const text = await response.text();
+    const lines = text.trim().split("\n").map((line) => JSON.parse(line));
+    expect(lines.at(-1)).toEqual({ type: "done" });
+
+    const pages = lines.filter((line) => line.type === "page");
+    expect(pages).toHaveLength(1);
+    expect(pages[0].pageIndex).toBe(0);
+    expect(pages[0].pageCount).toBe(1);
+    expect(pages[0].items[0].carrier).toBe("InPost");
+  });
+
+  it("uszkodzony plik odrzuca statusem, zanim strumien ruszy", async () => {
+    stubBlob(new Uint8Array([1, 2, 3, 4]));
+    const response = await analyze(
+      new Request("http://localhost/api/analyze", {
+        method: "POST",
+        headers: { "content-type": "application/json", accept: "application/x-ndjson" },
+        body: JSON.stringify({ sources: [{ url: "https://x.public.blob.vercel-storage.com/a.pdf" }] }),
+      }),
+    );
+    expect(response.status).toBe(400);
+    expect(response.headers.get("content-type")).toContain("application/json");
+  });
+
   it("odrzuca adres spoza przechowalni", async () => {
     stubBlob();
     const response = await analyze(jsonRequest({ sources: [{ url: "https://example.com/a.pdf" }] }));

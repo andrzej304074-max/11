@@ -8,6 +8,7 @@ import { FileQueue } from "@/components/FileQueue";
 import { LabelCard, type CardState } from "@/components/LabelCard";
 import {
   type AnalyzeProgress,
+  type Phase,
   type PagePreview,
   type Source,
   analyze,
@@ -30,6 +31,7 @@ export default function Home() {
   const [progress, setProgress] = useState<AnalyzeProgress | null>(null);
   /** Set when a run finished cleanly but found nothing, so the screen says so. */
   const [empty, setEmpty] = useState(false);
+  const [phase, setPhase] = useState<Phase>("analyze");
   const [editing, setEditing] = useState<Editing>(null);
 
   const selected = useMemo(() => cards.filter((card) => card.include).length, [cards]);
@@ -92,9 +94,8 @@ export default function Home() {
     try {
       // Cards land as each slice of pages comes back, so a long batch shows
       // something within a second or two instead of after the whole run.
-      const found = await analyze(
-        sources,
-        (items) =>
+      const found = await analyze(sources, {
+        onItems: (items) =>
           setCards((current) => [
             ...current,
             ...items.map((item) => ({
@@ -104,8 +105,9 @@ export default function Home() {
               detectedRotate: item.rotate,
             })),
           ]),
-        setProgress,
-      );
+        onProgress: setProgress,
+        onPhase: setPhase,
+      });
       // Finishing with nothing is not success: without this the screen would
       // just drop back to the idle button as if the click never happened.
       setEmpty(found.length === 0);
@@ -198,7 +200,11 @@ export default function Home() {
               disabled={busy !== null}
               className="rounded-lg bg-neutral-900 px-5 py-2.5 text-sm font-medium text-white disabled:opacity-50"
             >
-              {busy === "analyze" ? "Analizuję…" : "Analizuj etykiety"}
+              {busy !== "analyze"
+                ? "Analizuj etykiety"
+                : phase === "upload"
+                  ? "Wysyłam pliki…"
+                  : "Analizuję…"}
             </button>
             {progress && progress.total > 0 && (
               <>

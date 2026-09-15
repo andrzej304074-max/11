@@ -200,20 +200,22 @@ async function analyzePage(
 
 export type AnalyzeRange = { from?: number; count?: number };
 export type AnalyzeResult = { items: AnalyzedItem[]; pageCount: number };
+export type PageResult = { pageIndex: number; pageCount: number; items: AnalyzedItem[] };
 
 /**
- * Analyze one uploaded PDF, optionally only a slice of its pages.
+ * Analyze one uploaded PDF page by page, optionally only a slice of it.
  *
- * Pages are processed one at a time and no bitmap is kept: a batch of thirty
- * labels would otherwise hold well over a hundred megabytes of grayscale at
- * once. Slicing also keeps a single request well clear of the function's
- * 60 s ceiling and lets the interface show labels as they are found.
+ * Yielding per page is what lets the route stream results: the document is
+ * fetched, normalized and parsed exactly once, while the interface still fills
+ * in as labels are found. Pages are processed one at a time and no bitmap is
+ * kept — a batch of thirty labels would otherwise hold well over a hundred
+ * megabytes of grayscale at once.
  */
-export async function analyzeFile(
+export async function* analyzePages(
   fileIndex: number,
   bytes: Uint8Array,
   range: AnalyzeRange = {},
-): Promise<AnalyzeResult> {
+): AsyncGenerator<PageResult> {
   const pdf = await loadPdf(bytes);
   try {
     const from = Math.min(Math.max(0, range.from ?? 0), pdf.pageCount);
@@ -225,7 +227,6 @@ export async function analyzeFile(
       return [] as PageText[];
     });
 
-    const items: AnalyzedItem[] = [];
     for (let pageIndex = from; pageIndex < to; pageIndex++) {
       const page = await pdf.renderPage(pageIndex);
       const result = await analyzePage(
@@ -238,12 +239,29 @@ export async function analyzeFile(
         page.heightPt,
         pages[pageIndex - from],
       );
-      items.push(...result.items);
       // Drop the bitmap before moving to the next page.
       page.gray.fill(0);
+      yield { pageIndex, pageCount: pdf.pageCount, items: result.items };
     }
-    return { items, pageCount: pdf.pageCount };
+
+    // An empty slice still has to report the document's length.
+    if (from >= to) yield { pageIndex: from, pageCount: pdf.pageCount, items: [] };
   } finally {
     pdf.destroy();
   }
+}
+
+/** Collecting wrapper for callers that want the whole answer at once. */
+export async function analyzeFile(
+  fileIndex: number,
+  bytes: Uint8Array,
+  range: AnalyzeRange = {},
+): Promise<AnalyzeResult> {
+  const items: AnalyzedItem[] = [];
+  let pageCount = 0;
+  for await (const page of analyzePages(fileIndex, bytes, range)) {
+    items.push(...page.items);
+    pageCount = page.pageCount;
+  }
+  return { items, pageCount };
 }

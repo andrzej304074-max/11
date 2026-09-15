@@ -6,6 +6,9 @@ import type { AnalyzedItem, GenerateItem } from "./types";
 
 export type Source = { file: File; blobUrl?: string };
 
+/** Which stage the run is in, so a stall is attributable on screen. */
+export type Phase = "upload" | "analyze";
+
 /**
  * Uploads straight to Vercel Blob when it is configured, and falls back to a
  * plain multipart POST otherwise (local development, small batches).
@@ -20,16 +23,43 @@ function blobConfigured(): Promise<boolean> {
   return blobAvailable;
 }
 
-async function ensureUploaded(sources: Source[]): Promise<boolean> {
+/** Vercel Blob's client retries ten times with a growing backoff, so a rate
+ *  limited or unhealthy store shows up as an upload that never settles. Past
+ *  this point the multipart route is the better answer, even with its ~4.5 MB
+ *  ceiling: a working upload beats an indefinite spinner. */
+const UPLOAD_TIMEOUT_MS = 25_000;
+
+function withTimeout<T>(work: Promise<T>, ms: number, message: string): Promise<T> {
+  return new Promise<T>((resolve, reject) => {
+    const timer = setTimeout(() => reject(new Error(message)), ms);
+    work.then(
+      (value) => {
+        clearTimeout(timer);
+        resolve(value);
+      },
+      (error: unknown) => {
+        clearTimeout(timer);
+        reject(error as Error);
+      },
+    );
+  });
+}
+
+async function ensureUploaded(sources: Source[], onPhase?: (phase: Phase) => void): Promise<boolean> {
   if (!(await blobConfigured())) return false;
   try {
     for (const source of sources) {
       if (source.blobUrl) continue;
-      const result = await upload(source.file.name, source.file, {
-        access: "public",
-        handleUploadUrl: "/api/blob/upload",
-        contentType: "application/pdf",
-      });
+      onPhase?.("upload");
+      const result = await withTimeout(
+        upload(source.file.name, source.file, {
+          access: "public",
+          handleUploadUrl: "/api/blob/upload",
+          contentType: "application/pdf",
+        }),
+        UPLOAD_TIMEOUT_MS,
+        "Przechowalnia plików nie odpowiada",
+      );
       source.blobUrl = result.url;
     }
     return true;
@@ -39,11 +69,17 @@ async function ensureUploaded(sources: Source[]): Promise<boolean> {
   }
 }
 
-async function post(url: string, sources: Source[], extra: Record<string, unknown>, useBlob: boolean) {
+async function post(
+  url: string,
+  sources: Source[],
+  extra: Record<string, unknown>,
+  useBlob: boolean,
+  headers: Record<string, string> = {},
+) {
   if (useBlob) {
     return fetch(url, {
       method: "POST",
-      headers: { "content-type": "application/json" },
+      headers: { "content-type": "application/json", ...headers },
       body: JSON.stringify({
         sources: sources.map((source) => ({ url: source.blobUrl, name: source.file.name })),
         ...extra,
@@ -55,7 +91,7 @@ async function post(url: string, sources: Source[], extra: Record<string, unknow
   for (const [key, value] of Object.entries(extra)) {
     form.append(key, typeof value === "string" ? value : JSON.stringify(value));
   }
-  return fetch(url, { method: "POST", body: form });
+  return fetch(url, { method: "POST", body: form, headers });
 }
 
 async function failure(response: Response): Promise<string> {
@@ -67,58 +103,120 @@ async function failure(response: Response): Promise<string> {
   }
 }
 
-/** Pages per request. Small enough to keep every call far from the 60 s
- *  function ceiling and to put the first labels on screen quickly. */
-const CHUNK = 5;
-
 export type AnalyzeProgress = { done: number; total: number };
 
+export type AnalyzeOptions = {
+  onItems?: (items: AnalyzedItem[]) => void;
+  onProgress?: (progress: AnalyzeProgress) => void;
+  onPhase?: (phase: Phase) => void;
+};
+
+/** How many times a stream that dies mid-document may be resumed. */
+const MAX_RESUMES = 3;
+
+type StreamLine =
+  | { type: "page"; fileIndex: number; pageIndex: number; pageCount: number; items: AnalyzedItem[] }
+  | { type: "done" }
+  | { type: "error"; error: string };
+
+/** Reads an NDJSON body line by line as it arrives. */
+async function* readLines(response: Response): AsyncGenerator<StreamLine> {
+  const reader = response.body?.getReader();
+  if (!reader) throw new Error("Serwer nie zwrócił strumienia");
+  const decoder = new TextDecoder();
+  let buffer = "";
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    buffer += decoder.decode(value, { stream: true });
+    let cut = buffer.indexOf("\n");
+    while (cut >= 0) {
+      const line = buffer.slice(0, cut).trim();
+      buffer = buffer.slice(cut + 1);
+      if (line) yield JSON.parse(line) as StreamLine;
+      cut = buffer.indexOf("\n");
+    }
+  }
+  const rest = buffer.trim();
+  if (rest) yield JSON.parse(rest) as StreamLine;
+}
+
 /**
- * Walks every file a few pages at a time, handing labels to `onItems` as soon
- * as each slice comes back. One request for a thirty-page batch would take tens
- * of seconds on a cold function, show nothing until the very end, and risk
- * hitting the duration limit.
+ * Analyzes each file with a single streaming request, handing labels to
+ * `onItems` as the server finds them.
+ *
+ * One request per file matters beyond tidiness: with Vercel Blob the server
+ * fetches the upload for every request it serves, so splitting a document into
+ * slices multiplied both the transfer and the parse by the number of slices.
+ * If a stream dies part-way — a function hitting its duration ceiling, a
+ * dropped connection — the run resumes from the next unprocessed page instead
+ * of starting over.
  */
 export async function analyze(
   sources: Source[],
-  onItems?: (items: AnalyzedItem[]) => void,
-  onProgress?: (progress: AnalyzeProgress) => void,
+  options: AnalyzeOptions = {},
 ): Promise<AnalyzedItem[]> {
-  const useBlob = await ensureUploaded(sources);
+  const { onItems, onProgress, onPhase } = options;
+  const useBlob = await ensureUploaded(sources, onPhase);
+  onPhase?.("analyze");
+
   const all: AnalyzedItem[] = [];
-
-  // Page counts are unknown up front: the total starts as one slice per file
-  // and sharpens as each file reports its real length.
   const pageCounts = new Map<number, number>();
-  const lengthOf = (index: number) => pageCounts.get(index) ?? CHUNK;
+  // Page counts are unknown until the first page of a file comes back, so the
+  // total starts as one page per file and sharpens from there.
+  const lengthOf = (index: number) => pageCounts.get(index) ?? 1;
 
+  let completed = 0;
   for (let fileIndex = 0; fileIndex < sources.length; fileIndex++) {
-    let from = 0;
+    let nextPage = 0;
     let pages = Infinity;
-    while (from < pages) {
+    let resumes = 0;
+
+    while (nextPage < pages) {
       const response = await post(
         "/api/analyze",
         [sources[fileIndex]],
-        { fileIndexBase: fileIndex, fromPage: from, pageCount: CHUNK },
+        { fileIndexBase: fileIndex, ...(nextPage > 0 ? { fromPage: nextPage } : {}) },
         useBlob,
+        { accept: "application/x-ndjson" },
       );
       if (!response.ok) throw new Error(await failure(response));
-      const data = (await response.json()) as { items: AnalyzedItem[]; pageCount: number };
 
-      pages = data.pageCount;
-      pageCounts.set(fileIndex, pages);
-      from = Math.min(from + CHUNK, pages);
-      all.push(...data.items);
-      if (data.items.length) onItems?.(data.items);
+      const startedAt = nextPage;
+      let finished = false;
+      let streamError: string | null = null;
 
-      let done = from;
-      let total = 0;
-      for (let i = 0; i < sources.length; i++) {
-        if (i < fileIndex) done += lengthOf(i);
-        total += lengthOf(i);
+      for await (const line of readLines(response)) {
+        if (line.type === "error") {
+          streamError = line.error;
+          break;
+        }
+        if (line.type === "done") {
+          finished = true;
+          break;
+        }
+        pages = line.pageCount;
+        pageCounts.set(fileIndex, pages);
+        nextPage = line.pageIndex + 1;
+        if (line.items.length) {
+          all.push(...line.items);
+          onItems?.(line.items);
+        }
+        let total = 0;
+        for (let i = 0; i < sources.length; i++) total += lengthOf(i);
+        onProgress?.({ done: completed + nextPage, total });
       }
-      onProgress?.({ done, total });
+
+      if (streamError) throw new Error(streamError);
+      if (finished || nextPage >= pages) break;
+
+      // The stream stopped early. Resume, but only while it keeps making
+      // progress — otherwise a page that always fails would loop forever.
+      if (nextPage <= startedAt || ++resumes > MAX_RESUMES) {
+        throw new Error("Analiza przerwana — spróbuj ponownie lub podziel plik na mniejsze części");
+      }
     }
+    completed += lengthOf(fileIndex);
   }
   return all;
 }
